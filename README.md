@@ -1,7 +1,7 @@
 # route-planning-Photogrammetry
 + 摄影测量作业之凸多边形航迹规划+高地地图API可视化
 + 申请高德API后，将代码第8行的your_key改写为自己的key值即可
-<img src="show.jpg" width="900px"/>
+<img src="show.JPG" width="900px"/>
 
 ## 参数选择
  + 参数选择界面在网页右侧，可由用户自行输入。其中各个参数的范围如下图所示。
