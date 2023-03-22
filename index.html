@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta http-equiv="X-UA-Compatible" content="IE=edge">
+	<title></title>
+	<link rel="stylesheet" href="https://a.amap.com/jsapi_demos/static/demo-center/css/demo-center.css" />
+	 <script src="https://webapi.amap.com/maps?v=1.4.15&key=cfc6e2f1c4b010cb1ffd383c5fb06f0e&plugin=AMap.PolyEditor&plugin=AMap.Geocoder"></script>
+	 <script src="https://a.amap.com/jsapi_demos/static/demo-center/js/demoutils.js"></script>
+    <script src="https://cdn.bootcss.com/FileSaver.js/1.3.8/FileSaver.js"></script>
+
+	<style>
+        html,
+        body,
+        #container {
+          width: 100%;
+          height: 100%;
+        }
+        .half {
+        	width: 50%;
+        }
+    </style>
+</head>
+<body>
+
+	<div id="container"></div> 
+	<div class="input-card" style="top:0; ">
+        <label for="scale">航摄比例尺(1:)</label>
+        <input id="scale" type="number" value="30000" oninput="if(value>60000)value=60000;if(value<0)value=450;refreshGSD()"><br>
+        <label for="GSD">像元地面分辨率GSD(cm)</label>
+        <input id="GSD" type="number" value="20.1" oninput="if(value>100)value=100;if(value<0)value=20;refreshScale()" step="0.1"><br>
+        <label for="focal_length">相机焦距(mm)</label>
+        <input id="focal_length" type="number" value="45" oninput="if(value>100)value=100;if(value<1)value=1"><br>
+        <label for="sensor_width">相片宽度(像素)：</label>
+        <input id="sensor_width" type="number"  value="12000" oninput="if(value>20000)value=20000;if(value<00)value=400"><br>
+        <label for="sensor_height">相片高度(像素)：</label>
+        <input id="sensor_height" type="number" value="8000" oninput="if(value>15000)value=15000;if(value<0)value=300"><br>
+        <label for="pixel_size">像素尺寸(mm)：</label>
+        <input id="pixel_size" type="number"  value="0.0067"  oninput="if(value>1)value=0.01;if(value<0)value=0;refreshScale()" step="0.00001" ><br>
+        <label for="longitudinal_overlap">航向重叠(%)：</label>
+        <input id="longitudinal_overlap" type="number" value="65" oninput="if(value>70)value=70;if(value<0)value=50"><br>
+        <label for="latitudinal_overlap">旁向重叠(%)：</label>
+        <input id="latitudinal_overlap" type="number" value="30" oninput="if(value>55)value=55;if(value<15)value=15"><br>
+        <label for="speed">飞行速度(km/h)：</label>
+        <input id="speed" type="number" value="50" oninput="if(value>400)value=400;if(value<5)value=5" step="0.1"><br>
+        <label for="maxh">测区最大高程(m)：</label>
+        <input id="maxh" type="number" value="200" oninput="if(value>8000)value=8000;if(value<-100)value=-100" step="0.1"><br>
+        <label for="minh">测区最小高程(m)：</label>
+        <input id="minh" type="number" value="30" oninput="if(value>8000)value=8000;if(value<-100)value=-100" step="0.1"><br>
+	    <button class="btn" onclick="openEditor()" style="margin-bottom: 5px">开始编辑</button> 
+   		<button class="btn" onclick="polyEditor.close()" style="margin-bottom: 5px">结束编辑</button> 
+   		<button class="btn" onclick="clearGon()" style="margin-bottom: 5px">清除多边形</button>
+        <button class="btn" onclick="plan()" style="margin-bottom: 5px">航迹规划</button> 
+        <button class="btn" onclick="show_rect()" style="margin-bottom: 5px" id="show">隐藏成像范围</button> 
+	</div>
+    <div class="input-card" style="top:0; left:0;height: 15%;">
+        <label id="new_lon_overlap"></label>
+        <label id="new_lat_overlap"></label>
+        <label id="baseline"></label>
+        <label id="band_num"></label>
+        <label id="height"></label>
+        <label id="wandh"></label>
+	</div>
+</body>
+<script>
+    var map = new AMap.Map('container',{
+            resizeEnable: true,
+            zoom: 12,
+            zooms: [9, 16],
+            center: [116.327428, 39.99923],
+        });
+    var bounds = map.getBounds();
+    map.setLimitBounds(bounds);
+
+	//开启多边形编辑
+	function openEditor() {
+		if(path.length > 0){
+			polyEditor.open();
+		} else {
+			//开启绘制多边形
+			log.info('开始绘制测区')
+			initMap();
+		}
+	}
+    function refreshGSD(){
+        var scale = document.getElementById("scale").value;
+        var pixel_size = document.getElementById("pixel_size").value;
+        var newGSD=pixel_size*scale/10;
+        document.getElementById("GSD").value=newGSD.toFixed(1);
+    }
+    function refreshScale(){
+        var scale = document.getElementById("scale").value;
+        var pixel_size = document.getElementById("pixel_size").value;
+        var GSD = document.getElementById("GSD").value;
+        var newscale=GSD*10/pixel_size;
+        document.getElementById("scale").value=Math.round(newscale);
+    }
+    //矢量图坐标组
+    var path = [];
+
+    function initMap() {
+    	// body...
+	    //通过插件方式引入 AMap.MouseTool 工具
+		map.plugin(["AMap.MouseTool"],function(){
+		   //在地图中添加MouseTool插件
+		    var mouseTool = new AMap.MouseTool(map);
+		    //用鼠标工具画多边形
+		    var drawPolygon = mouseTool.polygon();
+		    //添加事件
+		    AMap.event.addListener( mouseTool,'draw',function(e){
+		    	//清除绘制的多边形
+				mouseTool.close(true);
+		    	//整理坐标点，编辑图形
+		    	setPath(e.obj.getPath());
+		    });
+		});
+    }
+
+	//整理坐标点，编辑图形
+	function setPath(arr) {
+
+		for(j = 0,len=arr.length; j < len; j++) {
+    		points = [arr[j]['lng'], arr[j]['lat']];
+    		path.push(points);
+		}
+		//开启地图编辑
+		updatePath(path);
+	}
+
+	//编辑多边形对象
+	var polyEditor;
+
+	//开启地图编辑
+	function updatePath(path) {
+	    var polygon = new AMap.Polygon({
+	        path: path,
+	        strokeColor: "#FF33FF", 
+	        strokeWeight: 6,
+	        strokeOpacity: 0.2,
+	        fillOpacity: 0.4,
+	        fillColor: '#1791fc',
+	        zIndex: 50,
+	    })
+
+	    map.add(polygon)
+	    // 缩放地图到合适的视野级别
+	    map.setFitView([ polygon ])
+	    polyEditor = new AMap.PolyEditor(map, polygon);
+	    polyEditor.open();
+	    polyEditor.on('addnode', function(event) {
+	        log.info('添加节点')
+	    })
+	    polyEditor.on('removenode', function(event) {
+	        log.info('移除节点')
+	    })
+	    polyEditor.on('end', function(event) {
+	    })
+	}
+    var marker_list=[];
+    var polyline=[];
+    var img_list=[];
+	//删除多边形
+	function clearGon() {
+		path = [];
+        polyline = [];
+        marker_list = [];
+        img_list = [];
+        log.info('清除测区')
+		map.clearMap();
+        var new_lon_overlap=document.getElementById("new_lon_overlap");
+        new_lon_overlap.innerText="";
+        var new_lat_overlap=document.getElementById("new_lat_overlap");
+        new_lat_overlap.innerText="";
+        var baseline=document.getElementById("baseline");
+        baseline.innerText="";
+        var band_num=document.getElementById("band_num");
+        band_num.innerText="";
+        var height=document.getElementById("height");
+        height.innerText="";
+        var height=document.getElementById("show");
+        height.innerText="显示成像范围";
+	}
+    //坐标转换
+    function gcj02towgs84(lng, lat) {
+        var x_pi = 3.14159265358979324 * 3000.0 / 180.0;
+        var x = lng;
+        var y = lat;
+        var z = Math.sqrt(x * x + y * y) + 0.00002 * Math.sin(y * x_pi);
+        var theta = Math.atan2(y, x) + 0.000003 * Math.cos(x * x_pi);
+        var lng1 = z * Math.cos(theta) + 0.0065;
+        var lat1 = z * Math.sin(theta) + 0.006;
+        return [lng, lat];
+    }
+    function wgs84togcj02(lng, lat) {
+        var x_pi = 3.14159265358979324 * 3000.0 / 180.0;
+        var x = lng - 0.0065;
+        var y = lat - 0.006;
+        var z = Math.sqrt(x * x + y * y) - 0.00002 * Math.sin(y * x_pi);
+        var theta = Math.atan2(y, x) - 0.000003 * Math.cos(x * x_pi);
+        var lng1 = z * Math.cos(theta);
+        var lat1 = z * Math.sin(theta);
+        return [lng, lat];
+    }
+ 	//计算最小的最大的距离
+    function get_dis(){
+        var min_dis=-1;
+        var min_index=0;
+        var min_start=0;
+        var min_end=0;
+        for(var i=0;i<path.length;i++){
+            var p1=path[i];
+            var p2=path[(i+1)%path.length];
+            var temp_max=-1;
+            var temp_index=0;
+            var temp_start=0;
+            var temp_end=0;
+            for (var j = 0; j < path.length; j++) {
+                if(j==i||j==(i+1)%path.length)
+                    continue;
+                var p3=path[j];
+                var dis=AMap.GeometryUtil.distanceToSegment(p3,p1,p2);
+                if(temp_max==-1){
+                    temp_max=dis;
+                    temp_index=j;
+                    temp_start=i;
+                    temp_end=i+1;
+                }
+                else if(dis>temp_max){
+                    temp_max=dis;
+                    temp_index=j;
+                    temp_start=i;
+                    temp_end=i+1;
+                }
+            }
+            if(min_dis==-1){
+                min_dis=temp_max;
+                min_index=temp_index;
+                min_start=temp_start;
+                min_end=temp_end;
+            }
+            else if(temp_max<min_dis){
+                min_dis=temp_max;
+                min_index=temp_index;
+                min_start=temp_start;
+                min_end=temp_end;
+            }
+        }
+        return [min_dis,min_index,min_start,min_end];
+    }
+    function calculate(){
+        //计算缺失参数
+        var scale = document.getElementById("scale").value;
+        var GSD=document.getElementById("GSD").value;
+        var focal_length = document.getElementById("focal_length").value;
+        var sensor_width = document.getElementById("sensor_width").value;
+        var sensor_height = document.getElementById("sensor_height").value;
+        var pixel_size = document.getElementById("pixel_size").value;
+        var longitudinal_overlap = document.getElementById("longitudinal_overlap").value;
+        var latitudinal_overlap = document.getElementById("latitudinal_overlap").value;
+        var speed=document.getElementById("speed").value;
+        var maxh=document.getElementById("maxh").value;
+        var minh=document.getElementById("minh").value;
+        //高程差
+        var dh=maxh-minh;
+        //m
+        var m=GSD*10/pixel_size
+        //飞行高度
+        var height=focal_length*m/1000;
+        //新的重叠率
+        var new_lon_overlap=longitudinal_overlap/100+0.5*dh/height;
+        var new_lat_overlap=latitudinal_overlap/100+0.5*dh/height;
+        //基线长度
+        var baseline=sensor_height*pixel_size/1000*m*(1-new_lon_overlap);
+        //航带宽度
+        var lateral=sensor_width*pixel_size/1000*m*(1-new_lat_overlap);
+        //拍照间隔
+        var pic_time=baseline/(speed*1000/3600)
+        var size=sensor_height*pixel_size*m/1000
+        return [baseline,lateral,pic_time,height,new_lon_overlap,new_lat_overlap,sensor_height*pixel_size*m/1000,sensor_width*pixel_size*m/1000];
+    }
+
+    function rotate(angle,x,y){
+        //顺时针旋转
+        var x1=x*Math.cos(-angle)-y*Math.sin(-angle);
+        var y1=x*Math.sin(-angle)+y*Math.cos(-angle);
+        return [x1,y1];
+    }
+    function rotate_back(angle,x,y){
+        //逆时针旋转
+        var x1=x*Math.cos(angle)-y*Math.sin(angle);
+        var y1=x*Math.sin(angle)+y*Math.cos(angle);
+        return [x1,y1];
+    }
+    function get_cross(y,path,directionx){
+        //计算多边形path与y的两个交点
+        var cross_list=[];
+        for (var i = 0; i < path.length; i++) {
+            var p1=path[i];
+            var p2=path[(i+1)%path.length];
+            if(p1[1]>y&&p2[1]<y||p1[1]<y&&p2[1]>y){
+                var x=p1[0]+(p2[0]-p1[0])*(y-p1[1])/(p2[1]-p1[1]);
+                cross_list.push(x);
+            }
+        }
+        if(directionx<0){
+            if (cross_list[0]>cross_list[1]) {
+                return [cross_list[0],cross_list[1]];
+            }
+            else{
+                return [cross_list[1],cross_list[0]];
+            }
+        }
+        else{
+            if (cross_list[0]>cross_list[1]) {
+                return [cross_list[1],cross_list[0]];
+            }
+            else{
+                return [cross_list[0],cross_list[1]];
+            }
+        }
+    }
+    function xytoWGS84(x,y){
+        //将平面坐标转换为经纬度
+        var lat=y/111319.48
+        var lng=x/(111319.48*Math.cos(39.99923*Math.PI/180))
+        return [lng,lat]
+    }
+    //获取图片的在地面上的经纬度范围
+    function get_img_range(cx,cy,w,h,angle,ori_lng,ori_lat){
+        var top_left=[cx-w/2,cy+h/2];
+        var top_right=[cx+w/2,cy+h/2];
+        var bottom_right=[cx+w/2,cy-h/2];
+        var bottom_left=[cx-w/2,cy-h/2];
+        top_left=rotate_back(angle,top_left[0],top_left[1]);
+        top_right=rotate_back(angle,top_right[0],top_right[1]);
+        bottom_left=rotate_back(angle,bottom_left[0],bottom_left[1]);
+        bottom_right=rotate_back(angle,bottom_right[0],bottom_right[1]);
+        var top_left_wgs=xytoWGS84(top_left[0],top_left[1]);
+        var top_right_wgs=xytoWGS84(top_right[0],top_right[1]);
+        var bottom_left_wgs=xytoWGS84(bottom_left[0],bottom_left[1]);
+        var bottom_right_wgs=xytoWGS84(bottom_right[0],bottom_right[1]);
+        var top_left_gcj02=wgs84togcj02(top_left_wgs[0],top_left_wgs[1]);
+        var top_right_gcj02=wgs84togcj02(top_right_wgs[0],top_right_wgs[1]);
+        var bottom_left_gcj02=wgs84togcj02(bottom_left_wgs[0],bottom_left_wgs[1]);
+        var bottom_right_gcj02=wgs84togcj02(bottom_right_wgs[0],bottom_right_wgs[1]);
+        bottom_right_gcj02=new AMap.LngLat(bottom_right_gcj02[0]+ori_lng,bottom_right_gcj02[1]+ori_lat);
+        bottom_left_gcj02=new AMap.LngLat(bottom_left_gcj02[0]+ori_lng,bottom_left_gcj02[1]+ori_lat);
+        top_right_gcj02=new AMap.LngLat(top_right_gcj02[0]+ori_lng,top_right_gcj02[1]+ori_lat);
+        top_left_gcj02=new AMap.LngLat(top_left_gcj02[0]+ori_lng,top_left_gcj02[1]+ori_lat);
+        return [top_left_gcj02,top_right_gcj02,bottom_right_gcj02,bottom_left_gcj02];
+    }
+    function get_path(base_dis){
+        //计算航带路径
+        //通过三角剖分判断是否为凸多边形
+        var triangles = AMap.GeometryUtil.triangulateShape(path);
+        if(triangles.length/3!=path.length-2){
+            alert("请绘制凸多边形！");
+            return;
+        }
+        log.info("计算航线中");
+        //计算最小距离
+        var min_list=get_dis()
+        var min_dis=min_list[0];
+        var min_index=min_list[1];
+        var min_start=min_list[2];
+        var min_end=min_list[3];
+        //计算航带数量
+        var band_num=parseInt(min_dis/base_dis[1])+1;
+        //计算航带到边的距离
+        var adjust_band_dis=(min_dis-(band_num-1)*base_dis[1])/2;
+        var path_xy=[[0,0]]
+        //gcj02到xy，同时将最小距离的起始点放在开头
+        for (var i = min_start+1; i < path.length; i++) {
+            var p=path[i];
+            var p_latlng=gcj02towgs84(p.lng,p.lat);
+            var p1_latlng=gcj02towgs84(path[min_start].lng,path[min_start].lat);
+            var lat_dis=-(p1_latlng[1]-p_latlng[1])*111319.48;
+            var lng_dis=-(p1_latlng[0]-p_latlng[0])*111319.48*Math.cos(p_latlng[1]*Math.PI/180);
+            var xy=[lng_dis,lat_dis];
+            path_xy.push(xy);
+        }
+        for (var i = 0; i < min_start; i++) {
+            var p=path[i];
+            var p_latlng=gcj02towgs84(p.lng,p.lat);
+            var p1_latlng=gcj02towgs84(path[min_start].lng,path[min_start].lat);
+            var lat_dis=-(p1_latlng[1]-p_latlng[1])*111319.48;
+            var lng_dis=-(p1_latlng[0]-p_latlng[0])*111319.48*Math.cos(p_latlng[1]*Math.PI/180);
+            var xy=[lng_dis,lat_dis];
+            path_xy.push(xy);
+        }
+        //计算旋转角度
+        var angle=Math.atan((path_xy[1][1]-path_xy[0][1])/(path_xy[1][0]-path_xy[0][0]));
+        //旋转坐标系
+        var path_xy1=[];
+        for (var i = 0; i < path_xy.length; i++) {
+            var xy=path_xy[i];
+            var xy1=rotate(angle,xy[0],xy[1]);
+            path_xy1.push(xy1);
+        }
+        //航线方向
+        var directionx=path_xy1[2][0]>0?1:-1;
+        var directiony=path_xy1[2][1]>0?1:-1;
+        //计算航带数量
+        //起始航带位置
+        var start_y=directiony*adjust_band_dis;
+        var crosses=get_cross(start_y,path_xy1,directionx)
+        var new_distance=Math.abs(crosses[0]-crosses[1]);
+        var base_num=parseInt(new_distance/base_dis[0])+3;
+        //起点到边的x距离
+        var adjust_base_dis=((base_num-1)*base_dis[0]-new_distance)/2;
+        var start_x=crosses[0]-directionx*adjust_base_dis;
+        var end_x=path_xy1[1][0]+directionx*adjust_base_dis;
+        //计算航带路径
+        var tmp_path=[]
+        var band_num_now=0
+        var tmp_imgs=[]
+        while(band_num_now<band_num){
+            for(var pic_num=0;pic_num<base_num;pic_num++){
+                //计算航带上的点，从xy转回gcj02
+                var newx=start_x+pic_num*base_dis[0]*directionx;
+                var newy=start_y;
+                var back_xy=rotate_back(angle,newx,newy);
+                var WGS84ll=xytoWGS84(back_xy[0],back_xy[1]);
+                var rel_gcj02=wgs84togcj02(WGS84ll[0],WGS84ll[1]);
+                var abs_gcj02=[path[min_start].lng+rel_gcj02[0],path[min_start].lat+rel_gcj02[1]];
+                var node=new AMap.LngLat(abs_gcj02[0],abs_gcj02[1])
+                tmp_path.push(node);  
+                var image_range=get_img_range(newx,newy,base_dis[6],base_dis[7],angle,path[min_start].lng,path[min_start].lat);
+                tmp_imgs.push(image_range);
+            }
+            //计算下一条航带的起始点
+            band_num_now+=1;
+            start_y+=base_dis[1]*directiony;
+            directionx=-directionx;
+            crosses=get_cross(start_y,path_xy1,directionx)
+            new_distance=Math.abs(crosses[0]-crosses[1]);
+            base_num=parseInt(new_distance/base_dis[0])+3;
+            adjust_base_dis=((base_num-1)*base_dis[0]-new_distance)/2;
+            start_x=crosses[0]-directionx*adjust_base_dis;
+            end_x=crosses[1]+directionx*adjust_base_dis;
+        }
+        return [tmp_path,band_num,tmp_imgs];
+    }
+
+    function show_rect(){
+        var height=document.getElementById("show");
+        if(img_list.length==0){
+            log.info('请先规划航迹！')
+            return;
+        }
+        if(height.innerText=="显示成像范围"){
+            height.innerText="隐藏成像范围";
+            for(var i=0;i<marker_list.length;i++){
+                map.add(img_list[i]);
+            }
+        }
+        else{
+            height.innerText="显示成像范围";
+            for(var i=0;i<marker_list.length;i++){
+                map.remove(img_list[i]);
+            }
+        }
+        
+    }
+    
+    function show(fly_path,base_dis){
+        console.log(fly_path[0][0],fly_path[2]);
+        //显示航线
+        if(polyline){
+            map.remove(polyline);
+            for(var i=0;i<marker_list.length;i++){
+                map.remove(marker_list[i]);
+                map.remove(img_list[i]);
+            }
+        }
+        polyline = new AMap.Polyline({
+            path: fly_path[0], //设置线覆盖物路径
+            strokeColor: "#07636F", //线颜色
+            strokeOpacity: 3, //线透明度
+            strokeWeight: 4, //线宽
+            strokeStyle: "solid", //线样式
+            strokeDasharray: [10, 5], //补充线样式
+        });
+        //显示航线上的点
+        map.add(polyline)
+        for(var i=0;i<fly_path[0].length;i++){
+            var marker = new AMap.Marker({
+                position: fly_path[0][i],
+                title: "第"+(i+1).toString()+"个成像点\n经度："+fly_path[0][i].lng+"\n纬度："+fly_path[0][i].lat,
+                label: {
+                    content: (i+1).toString(),
+                    offset: new AMap.Pixel(0, 0),
+                    direction: 'right'
+                }
+            });
+            map.add(marker);
+            marker_list.push(marker);
+            var img_range=new AMap.Polygon({
+                path: fly_path[2][i],
+                strokeColor: "#FF33FF", //线颜色
+                strokeOpacity: 1, //线透明度
+                strokeWeight: 2, //线宽
+                strokeStyle: "dashed", //线样式
+                strokeDasharray: [5, 3], //补充线样式
+                fillColor: "#ffffff", //填充色
+                fillOpacity: 0.35,//填充透明度
+                title: "第"+(i+1).toString()+"个成像点\n经度："+fly_path[0][i].lng+"\n纬度："+fly_path[0][i].lat,
+                label: {
+                    content: (i+1).toString(),
+                    offset: new AMap.Pixel(0, 0),
+                    direction: 'right'
+                }
+            });
+            img_list.push(img_range);
+            map.add(img_range);
+        }
+        var new_lon_overlap=document.getElementById("new_lon_overlap");
+        new_lon_overlap.innerText="新的航向重叠："+((base_dis[4]*100).toFixed(1)).toString().slice(0,4)+"%";
+        var new_lat_overlap=document.getElementById("new_lat_overlap");
+        new_lat_overlap.innerText="新的旁向重叠："+((base_dis[5]*100).toFixed(1)).toString().slice(0,4)+"%";
+        var baseline=document.getElementById("baseline");
+        baseline.innerText="基线长度："+(base_dis[0].toFixed(1)).toString()+"m，航带间距："+(base_dis[1].toFixed(1)).toString()+"m";
+        var band_num=document.getElementById("band_num");
+        band_num.innerText="航带数："+fly_path[1].toString()+"，成像数："+fly_path[0].length.toString();
+        var height=document.getElementById("height");
+        height.innerText="航高："+(base_dis[3].toFixed(1)).toString()+"m，成像间隔："+(base_dis[2].toFixed(1)).toString()+"s";
+        var wh=document.getElementById("wandh");
+        wh.innerText="影像宽度："+(base_dis[6].toFixed(1)).toString()+"m，影像高度："+(base_dis[7].toFixed(1)).toString()+"m";
+        //保存数据到result.json
+        var result={
+            "lon_overlap":base_dis[4].toFixed(3)*100,
+            "lat_overlap":base_dis[5].toFixed(3)*100,
+            "baseline":base_dis[0].toFixed(1),
+            "band_space":base_dis[1].toFixed(1),
+            "band_num":fly_path[1],
+            "height":base_dis[3].toFixed(1),
+            "img_interval":base_dis[2].toFixed(1),
+            "img_width":base_dis[6].toFixed(1),
+            "img_height":base_dis[7].toFixed(1),
+            "img_num":fly_path[0].length,
+            "path":fly_path[0],
+            "img_range":fly_path[2],
+        }
+        var result_json=JSON.stringify(result);
+        var blob = new Blob([result_json], {type: "text/plain;charset=utf-8"});
+        saveAs(blob, "result.json");
+    
+        log.info("计算完成");
+    }
+    function plan() {
+        if (path.length <= 2) {
+            alert("请先绘制测区!");
+            return;
+        }
+        polyEditor.close();
+        base_dis=calculate();
+        var fly_path=get_path(base_dis);
+        show(fly_path,base_dis);
+    }
+    map.setFitView();
+
+</script>
+</html>
